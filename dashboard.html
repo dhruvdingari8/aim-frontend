@@ -399,7 +399,9 @@ let currentFilter = 'all';
 let detailTab = 'overview';
 let detailEvents = [];
 let detailCalibration = null;
-let pollTimer = null;
+let eventSource = null;
+let loadInFlight = null;
+let loadQueued = false;
 
 // ── API helpers ──────────────────────────────────────────────────────────────
 const API = '';  // same origin
@@ -686,8 +688,6 @@ function setFilter(f) {
 }
 
 async function adjustStock(containerId, change) {
-  const res = await fetchJSON(`/api/containers/${containerId}/adjust`);
-  // Use POST
   try {
     const r = await fetch(`/api/containers/${containerId}/adjust`, {
       method: 'POST',
@@ -743,34 +743,63 @@ function showToast(msg) {
 
 // ── Data loading ─────────────────────────────────────────────────────────────
 async function loadContainers() {
+  if (loadInFlight) {
+    loadQueued = true;
+    return loadInFlight;
+  }
+
+  loadInFlight = (async () => {
   const data = await fetchJSON('/api/containers');
   if (data && Array.isArray(data)) {
     containers = data;
 
-    // Fetch latest raw weight for each container in parallel
-    const weightPromises = containers.map(c =>
-      fetchJSON(`/api/raw-weight/${c.container_id}`)
-    );
-    const weights = await Promise.all(weightPromises);
-    weights.forEach((w, i) => {
-      if (w && w.raw_weight_g !== null) {
-        containers[i].raw_weight_g = w.raw_weight_g;
-        containers[i].weight_timestamp = w.timestamp;
-      } else {
-        containers[i].raw_weight_g = null;
-        containers[i].weight_timestamp = null;
-      }
-    });
-
     renderStats();
     renderGrid();
     if (selectedId !== null) renderDetail();
+  }
+  })();
+
+  try {
+    await loadInFlight;
+  } finally {
+    loadInFlight = null;
+    if (loadQueued) {
+      loadQueued = false;
+      await loadContainers();
+    }
   }
 }
 
 async function refresh() {
   await loadContainers();
   showToast('Refreshed');
+}
+
+function connectStream() {
+  if (eventSource) {
+    eventSource.close();
+  }
+
+  eventSource = new EventSource('/api/stream');
+
+  eventSource.addEventListener('inventory', async () => {
+    await loadContainers();
+    if (selectedId !== null) {
+      if (detailTab === 'events' || detailEvents.length > 0) {
+        const events = await fetchJSON(`/api/events/${selectedId}?limit=100`);
+        detailEvents = events || [];
+      }
+      if (detailTab === 'calibration' || detailCalibration === null) {
+        detailCalibration = await fetchJSON(`/api/calibration/${selectedId}`);
+      }
+      renderDetail();
+      renderGrid();
+    }
+  });
+
+  eventSource.onerror = () => {
+    // Browser auto-reconnect handles transient network/server restarts.
+  };
 }
 
 // ── Clock ────────────────────────────────────────────────────────────────────
@@ -968,8 +997,7 @@ async function init() {
   updateClock();
   setInterval(updateClock, 1000);
   await loadContainers();
-  // Auto-poll every 5 seconds
-  pollTimer = setInterval(loadContainers, 5000);
+  connectStream();
 }
 
 init();

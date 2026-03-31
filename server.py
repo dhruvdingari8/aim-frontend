@@ -25,8 +25,9 @@ import struct
 import logging
 import time
 import threading
+import json
 from collections import defaultdict, deque
-from flask import Flask, jsonify, send_file, request
+from flask import Flask, jsonify, send_file, request, Response
 
 # ═════════════════════════════════════════════════════════════════════════════
 # CONFIG
@@ -40,6 +41,26 @@ FLASK_PORT = 3000
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("AIM")
+
+# Server-sent event state (simple process-local pub/sub)
+_push_condition = threading.Condition()
+_push_version = 0
+_push_payload = {"type": "init", "version": 0}
+
+
+def publish_push_event(event_type="update", container_id=None):
+    """Notify connected SSE clients that dashboard data has changed."""
+    global _push_version, _push_payload
+    payload = {
+        "type": event_type,
+        "container_id": container_id,
+        "ts": time.time(),
+    }
+    with _push_condition:
+        _push_version += 1
+        payload["version"] = _push_version
+        _push_payload = payload
+        _push_condition.notify_all()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -149,7 +170,10 @@ def set_stock(container_id, new_stock):
             cur.execute("UPDATE containers SET current_stock = ? WHERE container_id = ?",
                         (new_stock, container_id))
             conn.commit()
-            return cur.rowcount > 0
+            updated = cur.rowcount > 0
+            if updated:
+                publish_push_event("stock", container_id)
+            return updated
     except sqlite3.OperationalError:
         return False
 
@@ -196,6 +220,7 @@ def record_sensor_event(container_id, raw_weight_g, sensor_status, decision,
                  None if net_weight_g is None else float(net_weight_g),
                  computed_stock, sensor_status, decision, note))
             conn.commit()
+            publish_push_event("sensor", container_id)
             return True
     except sqlite3.OperationalError:
         return False
@@ -430,14 +455,58 @@ def api_containers():
             cur = conn.cursor()
             cur.execute("""
                 SELECT c.container_id, c.item_id, i.item_name, i.item_weight,
-                       c.needed_stock, c.current_stock
+                       c.needed_stock, c.current_stock,
+                       rw.raw_weight_g,
+                       rw.created_at AS weight_timestamp
                 FROM containers c
                 JOIN items i ON c.item_id = i.item_id
+                LEFT JOIN (
+                    SELECT s.container_id, s.raw_weight_g, s.created_at
+                    FROM sensor_events s
+                    INNER JOIN (
+                        SELECT container_id, MAX(event_id) AS max_event_id
+                        FROM sensor_events
+                        GROUP BY container_id
+                    ) latest ON latest.max_event_id = s.event_id
+                ) rw ON rw.container_id = c.container_id
                 ORDER BY c.container_id
             """)
             return jsonify([dict(r) for r in cur.fetchall()])
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/stream")
+def api_stream():
+    def event_stream():
+        # Tell clients to retry quickly if connection drops.
+        yield "retry: 1000\n\n"
+
+        with _push_condition:
+            current_version = _push_version
+            initial_payload = dict(_push_payload)
+        yield f"event: inventory\ndata: {json.dumps(initial_payload)}\n\n"
+
+        while True:
+            with _push_condition:
+                has_update = _push_condition.wait_for(lambda: _push_version != current_version, timeout=15.0)
+                if has_update:
+                    current_version = _push_version
+                    payload = dict(_push_payload)
+                else:
+                    payload = None
+
+            if payload is None:
+                # Keep-alive comment so intermediaries don't close idle stream.
+                yield ": keepalive\n\n"
+            else:
+                yield f"event: inventory\ndata: {json.dumps(payload)}\n\n"
+
+    return Response(event_stream(), mimetype="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    })
 
 
 @app.route("/api/containers/<int:cid>")
@@ -558,6 +627,7 @@ def api_adjust_stock(cid):
             cur.execute("UPDATE containers SET current_stock = ? WHERE container_id = ?",
                         (new_stock, cid))
             conn.commit()
+            publish_push_event("stock", cid)
             return jsonify({"container_id": cid, "current_stock": new_stock})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -606,6 +676,7 @@ def api_tare(cid):
                                 note=f"pi-side tare — empty_bin_weight_g set to {tare_weight:.2f}g")
 
             logger.info("Tare: bin %d empty_bin_weight_g = %.2f g", cid, tare_weight)
+            publish_push_event("calibration", cid)
             return jsonify({"status": "tare_ok", "container_id": cid,
                             "empty_bin_weight_g": round(tare_weight, 2)})
 
@@ -652,6 +723,7 @@ def api_update_config(cid):
                         (int(needed_stock), cid))
 
             conn.commit()
+            publish_push_event("config", cid)
             return jsonify({"status": "ok", "container_id": cid})
     except sqlite3.IntegrityError:
         return jsonify({"error": "item name already exists on another bin"}), 400
@@ -711,6 +783,7 @@ def api_add_container():
                 VALUES (?, 0.0, 1.0, 2.0, 'round')""", (int(cid),))
 
             conn.commit()
+            publish_push_event("container_added", int(cid))
             return jsonify({"status": "ok", "container_id": int(cid)})
     except sqlite3.IntegrityError as e:
         return jsonify({"error": str(e)}), 400
@@ -728,6 +801,7 @@ def api_delete_container(cid):
             cur.execute("DELETE FROM container_calibration WHERE container_id = ?", (cid,))
             cur.execute("DELETE FROM containers WHERE container_id = ?", (cid,))
             conn.commit()
+            publish_push_event("container_deleted", cid)
             return jsonify({"status": "ok", "deleted": cid})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -756,6 +830,7 @@ def api_update_calibration(cid):
                 SET scale_factor = ?, min_detectable_weight_g = ?, rounding_mode = ?
                 WHERE container_id = ?""", (sf, md, rm, cid))
             conn.commit()
+            publish_push_event("calibration", cid)
             return jsonify({"status": "ok", "container_id": cid})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -831,4 +906,4 @@ if __name__ == "__main__":
     print("  └─────────────────────────────────────────────┘")
     print()
 
-    app.run(host="0.0.0.0", port=FLASK_PORT, debug=False)
+    app.run(host="0.0.0.0", port=FLASK_PORT, debug=False, threaded=True)
