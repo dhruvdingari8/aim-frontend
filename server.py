@@ -779,7 +779,7 @@ def seed_containers():
     The container_id must match the bin_id your STM32 sends in byte 0.
     """
     ITEMS = [
-        (1, "Oxygen Masks", 45.0),
+        (1, "Surgilube", 4.1),
         # (2, "Bandages", 18.0),
         # (3, "Gauze Rolls", 28.0),
         # ... uncomment or add more as you connect bins
@@ -787,14 +787,14 @@ def seed_containers():
 
     CONTAINERS = [
         # (container_id, item_id, needed_stock, current_stock)
-        (1, 1, 5, 0),
+        (1, 1, 4, 0),
         # (2, 2, 20, 0),
         # (3, 3, 5, 0),
     ]
 
     CALIBRATIONS = [
         # (container_id, empty_bin_weight_g, scale_factor, min_detectable_g, rounding_mode)
-        (1, 0.0, 1.0, 2.0, "round"),
+        (1, 55.3, 1.0, 2.0, "round"),
         # (2, 0.0, 1.0, 2.0, "round"),
         # (3, 0.0, 1.0, 2.0, "round"),
     ]
