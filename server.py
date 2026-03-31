@@ -600,8 +600,60 @@ def api_tare(cid):
 # MAIN
 # ═════════════════════════════════════════════════════════════════════════════
 
+def seed_containers():
+    """
+    Seed bins and items on startup. Only inserts if not already present
+    (INSERT OR IGNORE), so it's safe to run every time.
+
+    ── TO ADD MORE BINS ──────────────────────────────────────────────
+    Just add a tuple to each list:
+      ITEMS:       (item_id, "Item Name", weight_per_unit_in_grams)
+      CONTAINERS:  (container_id, item_id, needed_stock, starting_stock)
+      CALIBRATION: (container_id, empty_bin_weight_g, scale_factor,
+                    min_detectable_g, "round"|"floor"|"ceil")
+    The container_id must match the bin_id your STM32 sends in byte 0.
+    """
+    ITEMS = [
+        (1, "Oxygen Masks", 45.0),
+        # (2, "Bandages", 18.0),
+        # (3, "Gauze Rolls", 28.0),
+        # ... uncomment or add more as you connect bins
+    ]
+
+    CONTAINERS = [
+        # (container_id, item_id, needed_stock, current_stock)
+        (1, 1, 5, 0),
+        # (2, 2, 20, 0),
+        # (3, 3, 5, 0),
+    ]
+
+    CALIBRATIONS = [
+        # (container_id, empty_bin_weight_g, scale_factor, min_detectable_g, rounding_mode)
+        (1, 0.0, 1.0, 2.0, "round"),
+        # (2, 0.0, 1.0, 2.0, "round"),
+        # (3, 0.0, 1.0, 2.0, "round"),
+    ]
+
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            for item in ITEMS:
+                cur.execute("INSERT OR IGNORE INTO items (item_id, item_name, item_weight) VALUES (?, ?, ?)", item)
+            for container in CONTAINERS:
+                cur.execute("INSERT OR IGNORE INTO containers (container_id, item_id, needed_stock, current_stock) VALUES (?, ?, ?, ?)", container)
+            for cal in CALIBRATIONS:
+                cur.execute("""INSERT OR IGNORE INTO container_calibration
+                    (container_id, empty_bin_weight_g, scale_factor, min_detectable_weight_g, rounding_mode)
+                    VALUES (?, ?, ?, ?, ?)""", cal)
+            conn.commit()
+        logger.info("Containers seeded: %d items, %d bins", len(ITEMS), len(CONTAINERS))
+    except Exception as e:
+        logger.error("Failed to seed containers: %s", e)
+
+
 if __name__ == "__main__":
     database_init()
+    seed_containers()
     start_can_bridge()
 
     print()
