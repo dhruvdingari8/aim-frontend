@@ -557,7 +557,7 @@ function renderDetail() {
   const level = stockLevel(c.current_stock, c.needed_stock);
 
   let content = `
-    <div class="detail-head slide-in">
+    <div class="detail-head">
       <div>
         <div class="detail-bin-id">BIN ${String(c.container_id).padStart(2, '0')}</div>
         <div class="detail-name">${c.item_name}</div>
@@ -784,16 +784,20 @@ function connectStream() {
 
   eventSource.addEventListener('inventory', async () => {
     await loadContainers();
+    let detailChanged = false;
     if (selectedId !== null) {
       if (detailTab === 'events' || detailEvents.length > 0) {
         const events = await fetchJSON(`/api/events/${selectedId}?limit=100`);
         detailEvents = events || [];
+        detailChanged = true;
       }
       if (detailTab === 'calibration' || detailCalibration === null) {
         detailCalibration = await fetchJSON(`/api/calibration/${selectedId}`);
+        detailChanged = true;
       }
-      renderDetail();
-      renderGrid();
+      if (detailChanged) {
+        renderDetail();
+      }
     }
   });
 
