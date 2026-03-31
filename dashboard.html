@@ -463,6 +463,7 @@ function renderGrid() {
               <span class="stock-current">${c.current_stock}</span>
               <span class="stock-needed">/ ${c.needed_stock} units</span>
             </div>
+            <div class="weight-line">${c.raw_weight_g !== null ? c.raw_weight_g + ' g raw' : 'no readings'}</div>
             <div class="weight-line">${c.item_weight} g per unit</div>
           </div>
         </div>
@@ -514,8 +515,10 @@ function renderDetail() {
 
       <div class="detail-rows">
         <div class="d-row"><span class="d-label">ITEM</span><span class="d-value">${c.item_name}</span></div>
+        <div class="d-row"><span class="d-label">RAW WEIGHT</span><span class="d-value" style="color:var(--text1)">${c.raw_weight_g !== null ? c.raw_weight_g + ' g' : '—'}</span></div>
         <div class="d-row"><span class="d-label">STOCK LEVEL</span><span class="d-value" style="color:${levelColor[level]}">${level}</span></div>
         <div class="d-row"><span class="d-label">WEIGHT / UNIT</span><span class="d-value">${c.item_weight} g</span></div>
+        <div class="d-row"><span class="d-label">TARE OFFSET</span><span class="d-value">${detailCalibration ? detailCalibration.empty_bin_weight_g.toFixed(1) + ' g' : '0.0 g'}</span></div>
       </div>
 
       ${detailEvents.length > 0 ? `
@@ -622,14 +625,24 @@ async function adjustStock(containerId, change) {
 async function sendTare(containerId) {
   const btn = document.getElementById('tare-btn');
   if (btn) btn.classList.add('sending');
-  showToast('Sending tare command…');
+  showToast('Taring…');
 
   try {
     const r = await fetch(`/api/containers/${containerId}/tare`, { method: 'POST' });
     const data = await r.json();
-    showToast(data.status === 'tare_sent' ? `Tare sent to bin ${containerId}` : `Tare failed: ${data.error || 'unknown'}`);
+    if (data.status === 'tare_ok') {
+      showToast(`Tared bin ${containerId} at ${data.empty_bin_weight_g} g`);
+      // Refresh to pick up new calibration
+      await loadContainers();
+      if (selectedId === containerId) {
+        detailCalibration = await fetchJSON(`/api/calibration/${containerId}`);
+        renderDetail();
+      }
+    } else {
+      showToast(`Tare failed: ${data.error || 'unknown'}`);
+    }
   } catch (e) {
-    showToast('CAN bus unavailable');
+    showToast('Tare failed: network error');
   }
   if (btn) btn.classList.remove('sending');
 }
@@ -646,6 +659,22 @@ async function loadContainers() {
   const data = await fetchJSON('/api/containers');
   if (data && Array.isArray(data)) {
     containers = data;
+
+    // Fetch latest raw weight for each container in parallel
+    const weightPromises = containers.map(c =>
+      fetchJSON(`/api/raw-weight/${c.container_id}`)
+    );
+    const weights = await Promise.all(weightPromises);
+    weights.forEach((w, i) => {
+      if (w && w.raw_weight_g !== null) {
+        containers[i].raw_weight_g = w.raw_weight_g;
+        containers[i].weight_timestamp = w.timestamp;
+      } else {
+        containers[i].raw_weight_g = null;
+        containers[i].weight_timestamp = null;
+      }
+    });
+
     renderStats();
     renderGrid();
     if (selectedId !== null) renderDetail();
