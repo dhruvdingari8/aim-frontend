@@ -232,6 +232,8 @@ let detailCalibration = null;
 let eventSource = null;
 let loadInFlight = null;
 let loadQueued = false;
+let streamRefreshTimer = null;
+let streamRefreshInFlight = false;
 
 const API = '';
 
@@ -500,18 +502,41 @@ async function loadContainers() {
 
 async function refresh() { await loadContainers(); showToast('Refreshed'); }
 
-function connectStream() {
-  if (eventSource) eventSource.close();
-  eventSource = new EventSource('/api/stream');
-  eventSource.addEventListener('inventory', async () => {
+async function runStreamRefresh() {
+  if (streamRefreshInFlight) return;
+  streamRefreshInFlight = true;
+  try {
     await loadContainers();
     let detailChanged = false;
     if (selectedId !== null) {
-      if (detailTab === 'events' || detailEvents.length > 0) { detailEvents = (await fetchJSON(`/api/events/${selectedId}?limit=100`)) || []; detailChanged = true; }
-      if (detailTab === 'calibration' || detailCalibration === null) { detailCalibration = await fetchJSON(`/api/calibration/${selectedId}`); detailChanged = true; }
+      if (detailTab === 'events') {
+        detailEvents = (await fetchJSON(`/api/events/${selectedId}?limit=100`)) || [];
+        detailChanged = true;
+      }
+      if (detailTab === 'calibration') {
+        detailCalibration = await fetchJSON(`/api/calibration/${selectedId}`);
+        detailChanged = true;
+      }
       if (detailChanged) renderDetail();
     }
-  });
+  } finally {
+    streamRefreshInFlight = false;
+  }
+}
+
+function queueStreamRefresh() {
+  if (streamRefreshTimer !== null) return;
+  // Coalesce bursts of sensor updates to keep the UI responsive.
+  streamRefreshTimer = setTimeout(async () => {
+    streamRefreshTimer = null;
+    await runStreamRefresh();
+  }, 120);
+}
+
+function connectStream() {
+  if (eventSource) eventSource.close();
+  eventSource = new EventSource('/api/stream');
+  eventSource.addEventListener('inventory', queueStreamRefresh);
   eventSource.onerror = () => {};
 }
 

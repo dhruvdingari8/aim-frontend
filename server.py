@@ -72,6 +72,9 @@ def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Better write concurrency for frequent sensor-event inserts.
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 
@@ -209,7 +212,8 @@ def get_container_calibration(container_id):
 
 
 def record_sensor_event(container_id, raw_weight_g, sensor_status, decision,
-                        net_weight_g=None, computed_stock=None, note=None):
+                        net_weight_g=None, computed_stock=None, note=None,
+                        notify_ui=True):
     try:
         with get_db() as conn:
             conn.execute("""INSERT INTO sensor_events
@@ -220,7 +224,8 @@ def record_sensor_event(container_id, raw_weight_g, sensor_status, decision,
                  None if net_weight_g is None else float(net_weight_g),
                  computed_stock, sensor_status, decision, note))
             conn.commit()
-            publish_push_event("sensor", container_id)
+            if notify_ui:
+                publish_push_event("sensor", container_id)
             return True
     except sqlite3.OperationalError:
         return False
@@ -343,7 +348,7 @@ class CANDriver:
 
 class CanDatabaseBridge:
     def __init__(self, can_channel='can0', bitrate=500000,
-                 stability_window=3, stability_tolerance_g=2.0):
+                 stability_window=2, stability_tolerance_g=2.0):
         self.driver = CANDriver(channel=can_channel, bitrate=bitrate)
         self.stability_window = max(1, int(stability_window))
         self.stability_tolerance_g = float(stability_tolerance_g)
@@ -375,6 +380,7 @@ class CanDatabaseBridge:
             raw_weight_g=weight_g,
             sensor_status="ok",
             decision="received",
+            notify_ui=False,
         )
 
         # Check stability window before updating stock
