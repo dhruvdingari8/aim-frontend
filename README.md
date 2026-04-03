@@ -38,15 +38,15 @@ The dashboard has three main areas:
 
 ```mermaid
 flowchart LR
-    LC["Load Cell\n(inside bin)"]
-    STM["STM32\nMicrocontroller"]
-    CAN["CAN Bus\n500 kbps"]
+    LC["Load Cell<br/>(inside bin)"]
+    STM["STM32<br/>Microcontroller"]
+    CAN["CAN Bus<br/>500 kbps"]
     PI["Raspberry Pi"]
-    TS["Touchscreen\nlocalhost:3000"]
+    TS["Touchscreen<br/>localhost:3000"]
 
     LC -->|"raw weight"| STM
-    STM -->|"bin_id + weight_g\n(CAN frame)"| CAN
-    CAN -->|"SocketCAN\n(can0)"| PI
+    STM -->|"bin_id + weight_g (CAN frame)"| CAN
+    CAN -->|"SocketCAN (can0)"| PI
     PI -->|"HTTP / SSE"| TS
 ```
 
@@ -156,7 +156,7 @@ Nothing imports upward. Each layer only depends on the layers below it. `shared/
 
 ```mermaid
 flowchart TD
-    main["main.py\nEntry point"]
+    main["main.py<br/>Entry point"]
 
     subgraph view["view/"]
         flask["flask_gui.py"]
@@ -196,23 +196,23 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["STM32 sends CAN frame\nbin_id + weight_g"]
+    A["STM32 sends CAN frame<br/>bin_id + weight_g"]
     B["CANDriver.receive()"]
-    C["CanDatabaseBridge\n.process_one_message()"]
-    D["record_sensor_event()\ndecision: 'received'"]
-    E{"Stability\nwindow\nfull?"}
+    C["CanDatabaseBridge<br/>.process_one_message()"]
+    D["record_sensor_event()<br/>decision: 'received'"]
+    E{"Stability<br/>window full?"}
     F["update_stock_from_weight()"]
     G["set_stock() → SQLite"]
-    H["record_sensor_event()\ndecision: 'accepted'"]
+    H["record_sensor_event()<br/>decision: 'accepted'"]
     I["publish_push_event()"]
-    J["SSE stream\n/api/stream"]
-    K["dashboard.js\nre-renders UI"]
+    J["SSE stream<br/>/api/stream"]
+    K["dashboard.js<br/>re-renders UI"]
 
     A --> B --> C
     C --> D
     C --> E
-    E -->|"No — wait\nfor more readings"| C
-    E -->|"Yes — readings\nare stable"| F
+    E -->|"No — wait for more readings"| C
+    E -->|"Yes — readings are stable"| F
     F --> G --> H --> I --> J --> K
 ```
 
