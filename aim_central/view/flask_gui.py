@@ -18,12 +18,8 @@ import logging
 from flask import Flask, jsonify, send_file, request, Response
 
 from aim_central.shared.config import FLASK_PORT
-from aim_central.shared.events import (
-    publish_push_event,
-    _push_condition,
-    _push_version,
-    _push_payload,
-)
+from aim_central.shared import events as _events
+from aim_central.shared.events import publish_push_event
 from aim_central.driver.database_operations import (
     get_db,
     record_sensor_event,
@@ -119,17 +115,19 @@ def api_stream():
         # Tell clients to retry quickly if connection drops.
         yield "retry: 1000\n\n"
 
-        with _push_condition:
-            current_version = _push_version
-            initial_payload = dict(_push_payload)
+        with _events._push_condition:
+            current_version = _events._push_version
+            initial_payload = dict(_events._push_payload)
         yield f"event: inventory\ndata: {json.dumps(initial_payload)}\n\n"
 
         while True:
-            with _push_condition:
-                has_update = _push_condition.wait_for(lambda: _push_version != current_version, timeout=15.0)
+            with _events._push_condition:
+                has_update = _events._push_condition.wait_for(
+                    lambda: _events._push_version != current_version, timeout=15.0
+                )
                 if has_update:
-                    current_version = _push_version
-                    payload = dict(_push_payload)
+                    current_version = _events._push_version
+                    payload = dict(_events._push_payload)
                 else:
                     payload = None
 
